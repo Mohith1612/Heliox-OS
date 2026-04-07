@@ -425,6 +425,20 @@ class Executor:
 
     async def _execute_single(self, action: Action, snapshot_id: str | None) -> ActionResult:
         """Execute a single validated action."""
+        
+        # Apply TRIBE v2 Stress Gate checking
+        stress_gate = getattr(self, "_stress_gate", None)
+        if stress_gate and stress_gate.enabled:
+            # Action type is used to check risk
+            gate_decision = await stress_gate.evaluate(action.action_type)
+            if gate_decision.gated:
+                return ActionResult(
+                    action=action,
+                    success=False,
+                    error=f"Task paused due to cognitive stress gate ({gate_decision.reason}). Explicit user override required.",
+                    snapshot_id=snapshot_id
+                )
+
         handler = self._dispatch_table.get(action.action_type)
         if handler is None:
             return ActionResult(

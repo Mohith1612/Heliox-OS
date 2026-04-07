@@ -88,6 +88,11 @@ class PilotServer:
         self._screen_vision: Any = None
         self._memory: Any = None
         self._vault: Any = None
+        # Cognitive intelligence (TRIBE v2)
+        self._tribe_engine: Any = None
+        self._attention_ui: Any = None
+        self._stress_gate: Any = None
+        self._intent_predictor: Any = None
         self._running = False
         self._pending_confirms: dict[str, PendingConfirmation] = {}
 
@@ -201,6 +206,34 @@ class PilotServer:
         except Exception:
             logger.warning("ScreenVisionAgent init failed (non-critical)", exc_info=True)
 
+        # ── Cognitive Intelligence (TRIBE v2) ──
+        try:
+            from pilot.cognitive.tribe_engine import TribeEngine
+            from pilot.cognitive.attention_scorer import AttentionAwareUI
+            from pilot.cognitive.stress_gate import StressGate
+            from pilot.cognitive.intent_predictor import IntentPredictor
+
+            self._tribe_engine = TribeEngine.get_instance()
+            self._attention_ui = AttentionAwareUI(self._tribe_engine)
+            self._attention_ui.set_broadcast(self._broadcast_notification)
+            self._stress_gate = StressGate(self._tribe_engine)
+            self._intent_predictor = IntentPredictor(self._tribe_engine)
+
+            # Inject cognitive modules into subsystem architectures
+            if self._executor:
+                self._executor._stress_gate = self._stress_gate
+            if self._fusion:
+                self._fusion._intent_predictor = self._intent_predictor
+
+            # Attempt background model load (non-blocking)
+            asyncio.create_task(self._tribe_engine.load_model())
+            logger.info(
+                "Cognitive intelligence initialized (TRIBE v2 %s)",
+                "loading" if self._tribe_engine.is_available else "fallback mode",
+            )
+        except Exception:
+            logger.warning("Cognitive intelligence init failed (non-critical)", exc_info=True)
+
         self._handlers = {
             "execute": self._handle_execute,
             "confirm": self._handle_confirm,
@@ -253,10 +286,36 @@ class PilotServer:
             "screen_current_app": self._handle_screen_current_app,
             "screen_vision_stats": self._handle_screen_vision_stats,
             "screen_vision_toggle": self._handle_screen_vision_toggle,
+            # Cognitive intelligence (TRIBE v2) endpoints
+            "cognitive_stats": self._handle_cognitive_stats,
+            "cognitive_state": self._handle_cognitive_state,
+            "attention_toggle": self._handle_attention_toggle,
+            "stress_gate_toggle": self._handle_stress_gate_toggle,
+            "intent_predictor_toggle": self._handle_intent_predictor_toggle,
+            "tribe_model_toggle": self._handle_tribe_model_toggle,
         }
 
     async def _broadcast_notification(self, method: str, params: Any) -> None:
         """Broadcast a notification to all connected clients."""
+        
+        # Apply Attention-Aware UI filtering/scoring
+        if getattr(self, "_attention_ui", None) and self._attention_ui.enabled:
+            try:
+                content = params if isinstance(params, dict) else {"data": params}
+                scored = await self._attention_ui.score_event(method, content)
+                if not scored.should_display:
+                    return
+                # Embed cognitive hints directly into outgoing parameters
+                if isinstance(params, dict):
+                    params["_cognitive"] = {
+                        "priority": scored.priority,
+                        "attention_score": scored.attention_score,
+                        "should_animate": scored.should_animate,
+                        "display_duration_ms": scored.display_duration_ms
+                    }
+            except Exception as e:
+                logger.error("Attention scoring failed: %s", e)
+
         msg = _notification(method, params)
         for client in list(self._clients):
             try:
@@ -1115,7 +1174,74 @@ class PilotServer:
             await self._reflector.close()
         if self._memory:
             await self._memory.close()
+        # Unload TRIBE v2 model
+        if self._tribe_engine and self._tribe_engine.is_loaded:
+            self._tribe_engine.unload_model()
         logger.info("Pilot daemon stopped")
+
+    # ── Cognitive Intelligence (TRIBE v2) Handlers ──
+
+    async def _handle_cognitive_stats(self, params: dict, ws: ServerConnection) -> dict:
+        """Get stats for all cognitive subsystems."""
+        return {
+            "tribe_engine": self._tribe_engine.get_stats() if self._tribe_engine else None,
+            "attention_ui": self._attention_ui.get_stats() if self._attention_ui else None,
+            "stress_gate": self._stress_gate.get_stats() if self._stress_gate else None,
+            "intent_predictor": (
+                self._intent_predictor.get_stats() if self._intent_predictor else None
+            ),
+        }
+
+    async def _handle_cognitive_state(self, params: dict, ws: ServerConnection) -> dict:
+        """Get current predicted cognitive state."""
+        if not self._tribe_engine:
+            return {"error": "Cognitive engine not initialized"}
+        state = await self._tribe_engine.predict_cognitive_state(
+            stimulus_description=params.get("stimulus", ""),
+        )
+        return state.to_dict()
+
+    async def _handle_attention_toggle(self, params: dict, ws: ServerConnection) -> dict:
+        """Toggle attention-aware UI scoring."""
+        if not self._attention_ui:
+            return {"error": "Attention UI not initialized"}
+        enabled = self._attention_ui.toggle(params.get("enabled"))
+        return {"enabled": enabled}
+
+    async def _handle_stress_gate_toggle(self, params: dict, ws: ServerConnection) -> dict:
+        """Toggle stress-aware task gating."""
+        if not self._stress_gate:
+            return {"error": "Stress gate not initialized"}
+        enabled = self._stress_gate.toggle(params.get("enabled"))
+        return {"enabled": enabled}
+
+    async def _handle_intent_predictor_toggle(
+        self, params: dict, ws: ServerConnection
+    ) -> dict:
+        """Toggle JARVIS mode intent prediction."""
+        if not self._intent_predictor:
+            return {"error": "Intent predictor not initialized"}
+        enabled = self._intent_predictor.toggle(params.get("enabled"))
+        return {"enabled": enabled}
+
+    async def _handle_tribe_model_toggle(
+        self, params: dict, ws: ServerConnection
+    ) -> dict:
+        """Load or unload the TRIBE v2 model."""
+        if not self._tribe_engine:
+            return {"error": "TRIBE engine not initialized"}
+        action = params.get("action", "status")
+        if action == "load":
+            success = await self._tribe_engine.load_model()
+            return {"loaded": success, "fallback": self._tribe_engine.is_fallback}
+        elif action == "unload":
+            self._tribe_engine.unload_model()
+            return {"loaded": False}
+        return {
+            "loaded": self._tribe_engine.is_loaded,
+            "fallback": self._tribe_engine.is_fallback,
+            "available": self._tribe_engine.is_available,
+        }
 
 
 def _setup_logging() -> None:
