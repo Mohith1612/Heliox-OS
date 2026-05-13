@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from pilot.models.cloud import CloudClient
 from pilot.models.ollama import OllamaClient
+from pilot.models.rate_limiter import TokenBucketRateLimiter
 
 if TYPE_CHECKING:
     from pilot.config import PilotConfig
@@ -35,6 +36,8 @@ class ModelRouter:
         if config.model.cloud_provider:
             self._cloud = CloudClient(config, vault)
 
+        self._rate_limiter = TokenBucketRateLimiter(config.model)
+
     async def generate(
         self,
         prompt: str,
@@ -44,6 +47,7 @@ class ModelRouter:
         temperature: float = 0.1,
     ) -> str:
         """Generate a completion from the best available model."""
+        await self._rate_limiter.acquire()
         provider = self._config.model.provider
 
         if provider == "cloud" and self._cloud:
@@ -128,6 +132,10 @@ class ModelRouter:
 
         client: LlamaCppClient = self._llamacpp  # type: ignore[assignment]
         return await client.generate(prompt, system=system, temperature=temperature)
+
+    def rate_limit_stats(self) -> dict:
+        """Return current rate limiter state and lifetime counters."""
+        return self._rate_limiter.get_stats()
 
     async def check_health(self) -> dict[str, bool]:
         """Check which backends are available."""
