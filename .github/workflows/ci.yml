@@ -72,6 +72,8 @@ jobs:
   visual-regression:
     name: Visual Regression (Playwright)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: tauri-app/ui
