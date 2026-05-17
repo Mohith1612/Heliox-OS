@@ -57,6 +57,8 @@ if TYPE_CHECKING:
     from pilot.memory.store import MemoryStore
     from pilot.models.router import ModelRouter
 
+from pilot.models.token_counter import count_tokens
+
 logger = logging.getLogger("pilot.agents.planner")
 
 
@@ -487,6 +489,11 @@ class Planner:
 
             context = await self._memory.get_context(user_input)
 
+            _CONTEXT_TOKEN_LIMIT = 2000
+            if count_tokens(context or "") > _CONTEXT_TOKEN_LIMIT:
+                context = context[: _CONTEXT_TOKEN_LIMIT * 4]
+                logger.debug("Memory context truncated to ~%d tokens", _CONTEXT_TOKEN_LIMIT)
+
             if error_context:
                 prompt = RETRY_TEMPLATE.format(
                     error=error_context,
@@ -531,6 +538,8 @@ class Planner:
 
                 if attempt < max_retries - 1:
                     context = await self._memory.get_context(user_input)
+                    if count_tokens(context or "") > _CONTEXT_TOKEN_LIMIT:
+                        context = context[: _CONTEXT_TOKEN_LIMIT * 4]
                     prompt = AUTO_HEAL_RETRY_TEMPLATE.format(
                         error=last_parse_error or "Unknown parse error",
                         raw_response=last_raw_response[:1000] if last_raw_response else "",

@@ -57,6 +57,8 @@ class ModelConfig:
     # Budget tracking — cumulative monthly spend limit
     budget_enabled: bool = True
     budget_monthly_limit_usd: float = 10.0
+    # Context compression — smaller model for summarising retry context; falls back to main model
+    compression_model: str = ""
 
 
 @dataclass
@@ -172,6 +174,7 @@ def _validate_config_types(raw: dict) -> None:
             "rate_limit_burst": int,
             "budget_enabled": bool,
             "budget_monthly_limit_usd": float,
+            "compression_model": str,
         },
         "security": {
             "root_enabled": bool,

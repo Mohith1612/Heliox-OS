@@ -125,6 +125,7 @@ class PilotServer:
         self._pending_confirms: dict[str, PendingConfirmation] = {}
         # ── Cancel Token (Issue #92) ──
         self._cancel_event: asyncio.Event | None = None
+        self._compressor: Any = None
 
     async def initialize(self) -> None:
         """Initialize all agent components.
@@ -182,6 +183,10 @@ class PilotServer:
         from pilot.agents.destructive_critic import DestructiveCriticAgent
 
         self._destructive_critic = DestructiveCriticAgent(model_router)
+
+        from pilot.agents.context_compressor import ContextCompressor
+
+        self._compressor = ContextCompressor(model_router)
 
         # Advanced agent components
         self._reflector = Reflector(model_router)
@@ -635,12 +640,19 @@ class PilotServer:
         all_results: list = []
         last_verification = None
         last_explanation = ""
+        step_log: list[str] = []
 
         for attempt in range(1 + self.MAX_RETRIES):
             # ── Cancel Token: check before each planning attempt ──
             if cancel_event.is_set():
                 logger.info("Execution cancelled before attempt %d", attempt + 1)
                 return {"status": "cancelled", "message": "Execution was aborted by user."}
+
+            # ── Context compression: keep retry context under TOKEN_BUDGET tokens ──
+            if attempt > 0 and self._compressor and step_log:
+                from pilot.models.token_counter import TOKEN_BUDGET
+
+                error_context = await self._compressor.compress(step_log, budget=TOKEN_BUDGET)
 
             plan_phase = ""
             if emit:
@@ -1000,7 +1012,9 @@ class PilotServer:
 
             failed_details = [d for d in verification.details if "FAILED" in d or "MISMATCH" in d]
             error_msgs = [r.error for r in results if r.error]
-            error_context = "\n".join(failed_details + error_msgs)
+            raw_error = "\n".join(failed_details + error_msgs)
+            step_log.append(f"[Attempt {attempt + 1}]\n{raw_error}")
+            error_context = raw_error
 
             if attempt < self.MAX_RETRIES:
                 await ws.send(
