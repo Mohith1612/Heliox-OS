@@ -175,8 +175,13 @@ class WasmPlugin:
             result_ptr = call_tool_fn(store, req_ptr, req_len)
 
             # 4. Read 4-byte LE length prefix, then the JSON payload.
+            mem_len = memory.data_len(store)
+            if result_ptr + 4 > mem_len:
+                raise WasmRuntimeError(f"WASM module returned out-of-bounds result pointer: {result_ptr}")
             length_bytes = bytes(data[result_ptr + i] for i in range(4))
             payload_len = struct.unpack("<I", length_bytes)[0]
+            if result_ptr + 4 + payload_len > mem_len:
+                raise WasmRuntimeError(f"WASM module payload length {payload_len} exceeds linear memory bounds")
             payload = bytes(data[result_ptr + 4 + i] for i in range(payload_len))
 
             # 5. Free the input buffer (best-effort; module owns result buffer).
